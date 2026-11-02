@@ -46,6 +46,42 @@ function getFieldVal(sheet, x, y, type) {
     }
 }
 
+function formatKeys(str) {
+    return str.replaceAll('Echap', '<kbd>Echap</kbd>')
+                .replaceAll('Entrée', '<kbd>Entrée</kbd>')
+                .replaceAll('Espace', '<kbd>Espace</kbd>')
+                .replaceAll('barre d’espace', '<kbd>barre d’espace</kbd>')
+                .replaceAll('barre d\'espace', '<kbd>barre d’espace</kbd>')
+                .replaceAll('Enter', '<kbd>Entrée</kbd>')
+                .replaceAll('Space', '<kbd>Espace</kbd>')
+                .replaceAll('Escape', '<kbd>Echap</kbd>')
+                .replaceAll('escape', '<kbd>Echap</kbd>')
+                .replaceAll('Esc', '<kbd>Echap</kbd>')
+}
+
+// some site names start with www and some others not. Until we have normalised all the names everywhere, we will need to try with and without www.
+function findUrl(siteName, names, sourceLabel, errorType) {
+    if (siteName in names) {
+        return siteName
+    }
+    if (siteName.match(/^www\./)) {
+        siteName = siteName.replace(/^www\./, '')
+        if (siteName in names) {
+            return siteName
+        }
+    }
+    if ('www.'+siteName in names) {
+        return 'www.'+siteName
+    }
+    const msg = `${errorType}: ${siteName} not found in ${sourceLabel}`
+    if (errorType.toLowerCase() == 'error') {
+        console.error(msg)
+    } else {
+        console.log(msg)
+    }
+    return
+}
+
 // read issues from Excel sheet
 const issues = []
 const topicsToDisplay = []
@@ -64,9 +100,13 @@ for (let pageIdx = 1; pageIdx < 4; pageIdx++) {
             console.log(process.argv[2], 'page '+ pageIdx, 'contains untested criterias');
             exit(1);
         }
-        if (status == 'NC' && comment.trim().length == 0) {
+        if (status == 'NC' && derogation == 'N' && comment.trim().length == 0) {
             console.log(process.argv[2], 'page '+ pageIdx, 'comment is empty for criteria ' + criteria);
             exit(1);            
+        }
+        if ((criteria == '8.1' || criteria == '8.2') && status !== 'C') {
+            console.log('Error: 8.1 and 8.2 are deprecated in '+process.argv[2]+', they should be conform');
+            exit(1);
         }
 
         if (status == 'NC' && derogation == 'N') {
@@ -93,6 +133,12 @@ const info = {}
 info['site'] = getFieldVal(workbook.Sheets['Échantillon'], 'B', '4', 'v')
 info['date'] = getFieldVal(workbook.Sheets['Échantillon'], 'A', '3', 'v')
 info['score'] = getFieldVal(workbook.Sheets['Résultats'], 'B', '4', 'v')
+const siteName = process.argv[2].replace(/^.*\//,'').replace('.xlsx', '')
+
+if (info['site'] == '' || info['date'] == '' || info['score'] == '')  {
+    console.error('metadata not found: '+ siteName)
+    exit(1)
+}
 
 // console.log(process.argv[2], info['score'])
 info['pages'] = []
@@ -102,19 +148,51 @@ for (let i=0; i<3; i++) {
     info['pages'][i]['id'] = i+1
     info['pages'][i]['label'] = getFieldVal(workbook.Sheets['Échantillon'], 'B', i+7 , 'v')
     info['pages'][i]['value'] = getFieldVal(workbook.Sheets['Échantillon'], 'C', i+7 , 'v')
+    if (info['pages'][i]['label'] == '' || info['pages'][i]['value'] == '') {
+        console.error('name or url of a page not found: '+ siteName)
+        exit(1)
+    }
 }
 
-const siteName = process.argv[2].replace(/^.*\//,'').replace('.xlsx', '')
-if (statements[siteName] === undefined) {
-    console.log('site not found in statements: '+ siteName)
+if (info['pages'][0]['label'] == info['pages'][1]['label'] || info['pages'][1]['label'] == info['pages'][2]['label'] || info['pages'][2]['label'] == info['pages'][0]['label']) {
+    console.error('Error: multiple pages have the same title '+ siteName)
+    exit(1)
+}
+
+const statementsUrl = findUrl (siteName, statements, 'statements', 'Error')
+const declaration = statements[statementsUrl]
+if (declaration === undefined) {
     exit(1)
 } 
-const declaration = statements[siteName]
-const docsInfos = docs[siteName]
+const docsInfosUrl = findUrl(siteName, docs, 'office-files.json', 'Warning')
+const docsInfos = docs[docsInfosUrl]
+
+// check if the file "accessibility-statements.json" has the right format
+const availableType = typeof declaration.available
+if (availableType !== "boolean") {
+    console.error(`Error: the available property in accessibility-statements.json should be a boolean, ${availableType} found.`)
+    exit(1)
+}
+
+if (declaration.conform !== undefined) {
+    const conformType = typeof declaration.conform
+    if (conformType !== "boolean") {
+        console.error(`Error: the conform property in accessibility-statements.json should be a boolean, ${conformType} found.`)
+        exit(1)
+    }
+}
+
+if (declaration.missing !== undefined) {
+    const missingType = typeof declaration.missing
+    if (missingType !== "string") {
+        console.error(`Error: the missing property in accessibility-statements.json should be a string, ${missingType} found.`)
+        exit(1)
+    }
+}
 
 
 // render issues
-ejs.renderFile(tpl_path+'/main.ejs', {topics: topics, md: md, mdForExcel: mdForExcel, info: info, solutions: solutions, issues: issues, declaration: declaration, docs: docsInfos}, function(err, str){
+ejs.renderFile(tpl_path+'/main.ejs', {topics: topics, md: md, mdForExcel: mdForExcel, info: info, solutions: solutions, issues: issues, declaration: declaration, docs: docsInfos, formatKeys: formatKeys}, function(err, str){
     if (err !== null) {
         console.log(err)
     }
